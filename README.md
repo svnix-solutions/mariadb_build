@@ -43,6 +43,16 @@ host.
 
 ---
 
+## Charset
+
+The server runs `utf8mb4` / `utf8mb4_unicode_ci` with
+`--character-set-client-handshake=FALSE`.
+
+That last flag is not decoration: it stops a client negotiating its own
+charset. Frappe/ERPNext requires it — without it `bench new-site` can create a
+`utf8` database that silently mangles emoji and non-Latin text, and you find
+out much later.
+
 ## Setup
 
 ```bash

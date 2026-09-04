@@ -25,6 +25,12 @@ services:
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
+      # FALSE stops a client negotiating its own charset. Frappe/ERPNext
+      # requires this: without it `bench new-site` can create a utf8 database
+      # that then mangles emoji and non-Latin text.
+      - --character-set-client-handshake=FALSE
+      - --max-allowed-packet=${MARIADB_MAX_ALLOWED_PACKET:-64M}
+      - --innodb-buffer-pool-size=${MARIADB_INNODB_BUFFER_POOL_SIZE:-256M}
     stop_grace_period: 1m
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
