@@ -1,0 +1,89 @@
+# MariaDB + phpMyAdmin for Node4.
+#
+# Data lives on a local Docker volume, NOT on the NAS -- the same fsync and
+# locking reasoning as the postgres stack. The NAS is bind-mounted at /backup
+# in the backup service only.
+#
+# phpMyAdmin has no user store of its own: it authenticates directly against
+# MariaDB. Today that means logging in as root. Provision least-privilege
+# accounts and stop using root for day-to-day work.
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      # Run mariadb-upgrade automatically after an image bump.
+      MARIADB_AUTO_UPGRADE: "1"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    # Bound to the node's LAN address, not 0.0.0.0.
+    ports:
+      - "${MARIADB_BIND:-127.0.0.1}:3306:3306"
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    stop_grace_period: 1m
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - db
+
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mariadb
+      PMA_PORT: "3306"
+      UPLOAD_LIMIT: 256M
+    ports:
+      - "${PMA_BIND:-127.0.0.1}:8080:80"
+    # service_started, not service_healthy: on a first deploy MariaDB's initdb
+    # can outrun compose's dependency wait, leaving phpmyadmin created but
+    # never started. phpMyAdmin copes fine with the DB not being up yet.
+    depends_on:
+      mariadb:
+        condition: service_started
+    networks:
+      - db
+
+  # One-off backup job, kept out of normal deploys by the profile. Invoked by
+  # the "MariaDB Backup" procedure via RunStackService.
+  backup:
+    image: mariadb:11.4
+    profiles: ["backup"]
+    restart: "no"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      MARIADB_HOST: mariadb
+      MARIADB_USER: root
+      # mariadb-dump reads MYSQL_PWD from the environment, so the password
+      # never appears in the process list.
+      MYSQL_PWD: ${MARIADB_ROOT_PASSWORD:?MARIADB_ROOT_PASSWORD is required}
+      RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./backup.sh:/usr/local/bin/backup.sh:ro
+      - type: bind
+        source: ${DBBACKUP_PATH:-/mnt/dbbackup/mariadb}
+        target: /backup
+        bind:
+          create_host_path: false
+    entrypoint: ["/bin/bash", "/usr/local/bin/backup.sh"]
+    networks:
+      - db
+
+volumes:
+  mariadb_data:
+
+networks:
+  db:
+    name: ${DB_NETWORK:-db}
